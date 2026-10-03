@@ -113,6 +113,7 @@ def create_community_router(
     key_field: str = "item_key",
     db_key_column: str = "item_key",
     admin_hide_path: str = "/admin/hide",
+    admin_unhide_path: str = "/admin/unhide",
 ) -> APIRouter:
     """Construye un APIRouter con los endpoints de comunidad.
 
@@ -313,5 +314,29 @@ def create_community_router(
                 (item_key, count, _now()),
             )
         return {key_field: item_key, "count": count, "admin_reported": True}
+
+    @router.post(admin_unhide_path)
+    async def admin_unhide(
+        payload: dict,
+        request: Request,
+        identity: Identity = Depends(_identity_dependency),
+    ) -> dict:
+        """Deshace el marcado como roto: limpia `admin_reported` y los reportes
+        de usuarios, para que la actividad vuelva al listado público."""
+        _guard(request)
+        if not identity.admin:
+            raise HTTPException(status_code=403, detail="admin required")
+        item_key = _payload_key(payload, key_field)
+
+        with connect(db_path) as conn:
+            removed = conn.execute(
+                f"DELETE FROM reports WHERE {key_column} = ?", (item_key,)
+            ).rowcount
+            conn.execute(
+                f"INSERT INTO broken_reports ({key_column}, count, admin_reported, updated_at) VALUES (?, 0, 0, ?) "
+                f"ON CONFLICT({key_column}) DO UPDATE SET count=0, admin_reported=0, updated_at=excluded.updated_at",
+                (item_key, _now()),
+            )
+        return {key_field: item_key, "count": 0, "admin_reported": False, "removed_reports": removed}
 
     return router

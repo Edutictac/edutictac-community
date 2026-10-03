@@ -22,6 +22,7 @@ def make_game_key_app(db_path, resolver):
             key_field="game_key",
             db_key_column="game_key",
             admin_hide_path="/admin/resources/hide",
+            admin_unhide_path="/admin/resources/unhide",
         ),
         prefix="/api/community",
     )
@@ -151,6 +152,32 @@ async def test_game_key_adapter_preserves_admin_hide_path(tmp_path):
 
     assert response.status_code == 200
     assert response.json() == {"game_key": "g", "count": 0, "admin_reported": True}
+
+
+@pytest.mark.anyio
+async def test_admin_unhide_restores_item(tmp_path):
+    db = str(tmp_path / "c.db")
+    async with await client_for(make_game_key_app(db, anon_resolver("u1"))) as anon:
+        await anon.post("/api/community/reports", json={"game_key": "g"})
+        async with await client_for(make_game_key_app(db, admin_resolver())) as admin:
+            hidden = await admin.post("/api/community/admin/resources/hide", json={"game_key": "g"})
+            assert hidden.json()["admin_reported"] is True
+            restored = await admin.post("/api/community/admin/resources/unhide", json={"game_key": "g"})
+
+        prefs = (await anon.get("/api/community/preferences")).json()
+
+    assert restored.status_code == 200
+    assert restored.json() == {"game_key": "g", "count": 0, "admin_reported": False, "removed_reports": 1}
+    assert prefs["broken_reports"]["g"] == {"count": 0, "admin_reported": False}
+    assert prefs["reports"] == []
+
+
+@pytest.mark.anyio
+async def test_admin_unhide_forbidden_for_anon(tmp_path):
+    db = str(tmp_path / "c.db")
+    async with await client_for(make_game_key_app(db, anon_resolver("u1"))) as anon:
+        r = await anon.post("/api/community/admin/resources/unhide", json={"game_key": "g"})
+    assert r.status_code == 403
 
 
 def test_rejects_unsafe_key_column(tmp_path):
